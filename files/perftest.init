@@ -1,0 +1,26 @@
+#!/bin/sh /etc/rc.common
+DEPEND=dbus
+START=15	#开机启动优先级(序列) [数值越小, 越先启动]
+STOP=95		#关机停止优先级(序列) [数值越小, 越先关闭]
+
+USE_PROCD=1			#指定初始化脚本类型：procd
+OOM_ADJ=-17			#oom设置为-17 
+PROG=/usr/bin/perftest		#从此目录下读取可执行文件perftest
+
+
+
+start_service() {		#开启一个服务
+
+ 	procd_open_instance 	
+
+        procd_set_param oom_adj $OOM_ADJ		#关闭oom
+        procd_set_param command $PROG			#执行程序perftest
+
+ 	procd_close_instance 
+
+}
+
+shutdown()			
+{
+	echo "shutdown!"
+}

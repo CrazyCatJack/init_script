@@ -1,0 +1,165 @@
+//#include <stdint.h>
+#This is a perftest patch written by XuRi.
+#Here is an important change in this file,the bug has been fixed.
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/time.h>
+#include <pthread.h>
+#include <time.h>
+
+#define N_THREADS 	4
+#define INPUT_S		128
+#define INPUT_N		32
+#define OUTPUT_N	32
+#define FILTER_S	9
+
+void Convolution_ST(
+		float *in_planes,
+		int n_in_planes,
+		int i_size,
+		float *out_planes,
+		int n_out_planes,
+		float *filters,
+		int f_size
+	)
+{
+	int op, ip, i,j, fi, fj;
+	int o_size = i_size-f_size + 1;
+	int offset = f_size - 1;
+	float *out_ptr, coef, *in_ptr, *in_plane, *filter, *out_plane;
+
+	for(op = 0; op<n_out_planes; op++) {
+		
+		for(ip = 0; ip<n_in_planes; ip++) {
+
+			in_plane = &(in_planes[ip*i_size*i_size]);
+			filter = &(filters[op*f_size*f_size*n_in_planes+ ip*f_size*f_size]);
+			out_plane = &(out_planes[op*o_size*o_size]);
+
+			for(fi = 0; fi < f_size; fi++) {
+
+				for(fj = 0; fj < f_size; fj++) {
+					coef = *filter++;
+					out_ptr = out_plane;
+					in_ptr = &in_plane[fi*i_size + fj];
+					for(i=0; i < o_size; i++) {
+						for(j=0; j < o_size; j++) {
+							*out_ptr += coef * (*in_ptr++);
+							out_ptr++;
+						}
+						in_ptr += offset;
+					}
+				}
+			}
+		}
+	}
+}
+
+typedef struct {
+	float *in_planes;
+	int n_in_planes;
+	int i_size;
+	float *out_planes;
+	int op_start;
+	int n_out_planes;
+	float *filters;
+	int f_size;
+} Convolution_th_t;
+
+void* Partial_Convolution(
+		void* args
+	)
+{
+	Convolution_th_t *th_attr = (Convolution_th_t*) args;
+	int op, ip, i, j, fi, fj;
+	int o_size = th_attr->i_size - th_attr->f_size + 1;
+	int offset = th_attr->f_size - 1;
+	float *out_ptr, coef, *in_ptr, *in_plane, *out_plane, *filter;
+
+	for(op = th_attr->op_start; op < th_attr->n_out_planes + th_attr->op_start; op++) {
+
+		for(ip = 0; ip < th_attr->n_in_planes; ip++) {
+
+			in_plane = &(th_attr->in_planes[ip*th_attr->i_size*th_attr->i_size]);
+			out_plane = &(th_attr->out_planes[op*o_size*o_size]);
+			filter = &(th_attr->filters[op*th_attr->f_size*th_attr->f_size*th_attr->n_in_planes+ ip*th_attr->f_size*th_attr->f_size]);
+
+			for(fi = 0; fi < th_attr->f_size; fi++) {
+				for(fj = 0; fj < th_attr->f_size; fj++) {
+					coef = *filter++;
+					out_ptr = out_plane;
+					in_ptr = &in_plane[fi*th_attr->i_size + fj];
+					for(i=0; i < o_size; i++) {
+						for(j=0; j < o_size; j++) {
+							*out_ptr += coef * (*in_ptr++);
+							out_ptr++;
+						}
+						in_ptr += offset;
+					}
+				}
+			}
+		}
+	}
+}
+
+void Convolution_MT(
+		float *in_planes,
+		int n_in_planes,
+		int i_size,
+		float *out_planes,
+		int n_out_planes,
+		float *filters,
+		int f_size
+	)
+{
+	pthread_t threads[N_THREADS];
+	Convolution_th_t args[N_THREADS];
+	int i;
+
+	//Create arguments for threads
+	for(i=0; i < N_THREADS; i++) {
+		args[i].in_planes = in_planes;
+		args[i].n_in_planes = n_in_planes;
+		args[i].i_size = i_size;
+		args[i].out_planes = out_planes;
+		args[i].op_start = i*(n_out_planes / N_THREADS);
+		args[i].n_out_planes = n_out_planes / N_THREADS;
+		args[i].filters = filters;
+		args[i].f_size = f_size;
+	}
+
+	Partial_Convolution(&args[0]);
+
+	//Launch the threads
+	//for(i=0; i < N_THREADS; i++) {
+	//	pthread_create(&threads[i], NULL, Partial_Convolution, &args[i]);
+	//}
+
+	//Join threads
+	//for(i=0; i<N_THREADS; i++) {
+	//	pthread_join(threads[i], NULL);
+	//}
+}
+
+int main()
+{
+	float *inputs, *outputs, *filters;
+	int i = 0;
+	time_t start_time;
+
+	inputs = (float*)malloc(INPUT_S*INPUT_S*INPUT_N*sizeof(float));
+	outputs = (float*)malloc((INPUT_S-FILTER_S+1)*(INPUT_S-FILTER_S+1)*OUTPUT_N*sizeof(float));
+	filters = (float*)malloc(FILTER_S*FILTER_S*INPUT_N*OUTPUT_N*sizeof(float));
+
+	start_time = time(NULL);
+	printf("Starting convolution!\n");
+	for(i=0; i<10; i++)
+		Convolution_MT(inputs, INPUT_N, INPUT_S, outputs, OUTPUT_N, filters, FILTER_S);
+	printf("Finished convolution! Time consumed %ld seconds.\n", time(NULL) - start_time);
+
+	free(inputs);
+	free(outputs);
+	free(filters);
+
+	return 0;
+}

@@ -1,0 +1,480 @@
+From 5a5e2e14da74e98ee4b3ae84fe7c3c3bc6ebe10e Mon Sep 17 00:00:00 2001
+From: xuri <xuri@allwinnertech.com>
+Date: Wed, 2 Aug 2017 19:03:08 +0800
+Subject: [PATCH] perftest: add perftest package
+
+perftest: add perftest package in package/Allwinner/
+directory.This package is written by XuRi,and it's
+Makefile has a floating point operation optimization
+which called 'vfp'.
+
+Change-Id: Id11176754c1a7288e90d25cf45b531377bfc0206
+Signed-off-by: xuri <xuripsw@allwinnertech.com>
+---
+ allwinner/perftest/Makefile            |  89 ++++++++++++++++++
+ allwinner/perftest/src/Makefile        |  13 +++
+ allwinner/perftest/src/perftest.c      | 163 ++++++++++++++++++++++++++++++++
+ allwinner/perftest/src/perftest.c.orig | 165 +++++++++++++++++++++++++++++++++
+ 4 files changed, 430 insertions(+)
+ create mode 100755 allwinner/perftest/Makefile
+ create mode 100755 allwinner/perftest/src/Makefile
+ create mode 100644 allwinner/perftest/src/perftest.c
+ create mode 100644 allwinner/perftest/src/perftest.c.orig
+
+diff --git a/allwinner/perftest/Makefile b/allwinner/perftest/Makefile
+new file mode 100755
+index 0000000..04d96fe
+--- /dev/null
++++ allwinner/perftest/Makefile
+@@ -0,0 +1,89 @@
++##############################################
++# OpenWrt Makefile for helloworld program
++#
++#
++# Most of the variables used here are defined in
++# the include directives below. We just need to
++# specify a basic description of the package,
++# where to build our program, where to find
++# the source files, and where to install the
++# compiled program on the router.
++#
++# Be very careful of spacing in this file.
++# Indents should be tabs, not spaces, and
++# there should be no trailing whitespace in
++# lines that are not commented.
++#
++##############################################
++include $(TOPDIR)/rules.mk
++
++# Name and release number of this package
++PKG_NAME:=perftest
++PKG_VERSION:=1.0
++PKG_RELEASE:=1
++
++# This specifies the directory where we're going to build the program.
++# The root build directory, $(BUILD_DIR), is by default the build_mipsel
++# directory in your OpenWrt SDK directory
++PKG_BUILD_DIR := $(COMPILE_DIR)/$(PKG_NAME)
++
++
++include $(BUILD_DIR)/package.mk
++
++# Specify package information for this program.
++# The variables defined here should be self explanatory.
++# If you are running Kamikaze, delete the DESCRIPTION
++# variable below and uncomment the Kamikaze define
++# directive for the description below
++define Package/perftest
++  SECTION:=utils
++  CATEGORY:=Allwinner
++  TITLE:=camerateset test camera sensor
++
++endef
++
++# Specify what needs to be done to prepare for building the package.
++# In our case, we need to copy the source files to the build directory.
++# This is NOT the default.  The default uses the PKG_SOURCE_URL and the
++# PKG_SOURCE which is not defined here to download the source from the web.
++# In order to just build a simple program that we have just written, it is
++# much easier to do it this way.
++define Build/Prepare
++	mkdir -p $(PKG_BUILD_DIR)
++	$(CP) -r ./src/* $(PKG_BUILD_DIR)/
++endef
++
++define Build/Compile
++	$(MAKE) -C $(PKG_BUILD_DIR)/ \
++		ARCH="$(TARGET_ARCH)" \
++		AR="$(TARGET_AR)" \
++		CC="$(TARGET_CC)" \
++		CXX="$(TARGET_CXX)" \
++		CFLAGS="$(TARGET_CFLAGS)" \
++		LDFLAGS="$(TARGET_LDFLAGS)" \
++		all
++endef
++
++# We do not need to define Build/Configure or Build/Compile directives
++# The defaults are appropriate for compiling a simple program such as this one
++
++
++# Specify where and how to install the program. Since we only have one file,
++# the helloworld executable, install it by copying it to the /bin directory on
++# the router. The $(1) variable represents the root directory on the router running
++# OpenWrt. The $(INSTALL_DIR) variable contains a command to prepare the install
++# directory if it does not already exist.  Likewise $(INSTALL_BIN) contains the
++# command to copy the binary file from its current location (in our case the build
++# directory) to the install directory.
++define Package/perftest/install
++	$(INSTALL_DIR) $(1)/usr/bin/
++	$(INSTALL_BIN) $(PKG_BUILD_DIR)/perftest $(1)/usr/bin/
++endef
++
++
++# This line executes the necessary commands to compile our program.
++# The above define directives specify all the information needed, but this
++# line calls BuildPackage which in turn actually uses this information to
++# build a package.
++
++$(eval $(call BuildPackage,perftest))
+diff --git a/allwinner/perftest/src/Makefile b/allwinner/perftest/src/Makefile
+new file mode 100755
+index 0000000..6b3f9a7
+--- /dev/null
++++ allwinner/perftest/src/Makefile
+@@ -0,0 +1,13 @@
++TARGET			=	perftest
++INCLUDES		+=	-I$(STAGING_DIR)/usr/include/allwinner/include -I$(STAGING_DIR)/usr/include/allwinner
++LIBS			+=  -lpthread -ldl -lrt \
++
++SRCS	= perftest.c
++$(TARGET): $(SRCS)
++	$(CC) -o $(TARGET) $(INCLUDES) $(LIBS) $(LDFLAGS) $(CFLAGS) -mfpu=vfp $(SRCS) 
++all:$(TARGET)
++
++
++clean:
++	rm -rf $(TARGET) *.o *.a *~
++	cd common && rm -f *.o *.a *.bak *~ .depend
+diff --git a/allwinner/perftest/src/perftest.c b/allwinner/perftest/src/perftest.c
+new file mode 100644
+index 0000000..deff882
+--- /dev/null
++++ allwinner/perftest/src/perftest.c
+@@ -0,0 +1,163 @@
++//#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/time.h>
++#include <pthread.h>
++#include <time.h>
++
++#define N_THREADS 	4
++#define INPUT_S		128
++#define INPUT_N		32
++#define OUTPUT_N	32
++#define FILTER_S	9
++
++void Convolution_ST(
++		float *in_planes,
++		int n_in_planes,
++		int i_size,
++		float *out_planes,
++		int n_out_planes,
++		float *filters,
++		int f_size
++	)
++{
++	int op, ip, i,j, fi, fj;
++	int o_size = i_size-f_size + 1;
++	int offset = f_size - 1;
++	float *out_ptr, coef, *in_ptr, *in_plane, *filter, *out_plane;
++
++	for(op = 0; op<n_out_planes; op++) {
++		
++		for(ip = 0; ip<n_in_planes; ip++) {
++
++			in_plane = &(in_planes[ip*i_size*i_size]);
++			filter = &(filters[op*f_size*f_size*n_in_planes+ ip*f_size*f_size]);
++			out_plane = &(out_planes[op*o_size*o_size]);
++
++			for(fi = 0; fi < f_size; fi++) {
++
++				for(fj = 0; fj < f_size; fj++) {
++					coef = *filter++;
++					out_ptr = out_plane;
++					in_ptr = &in_plane[fi*i_size + fj];
++					for(i=0; i < o_size; i++) {
++						for(j=0; j < o_size; j++) {
++							*out_ptr += coef * (*in_ptr++);
++							out_ptr++;
++						}
++						in_ptr += offset;
++					}
++				}
++			}
++		}
++	}
++}
++
++typedef struct {
++	float *in_planes;
++	int n_in_planes;
++	int i_size;
++	float *out_planes;
++	int op_start;
++	int n_out_planes;
++	float *filters;
++	int f_size;
++} Convolution_th_t;
++
++void* Partial_Convolution(
++		void* args
++	)
++{
++	Convolution_th_t *th_attr = (Convolution_th_t*) args;
++	int op, ip, i, j, fi, fj;
++	int o_size = th_attr->i_size - th_attr->f_size + 1;
++	int offset = th_attr->f_size - 1;
++	float *out_ptr, coef, *in_ptr, *in_plane, *out_plane, *filter;
++
++	for(op = th_attr->op_start; op < th_attr->n_out_planes + th_attr->op_start; op++) {
++
++		for(ip = 0; ip < th_attr->n_in_planes; ip++) {
++
++			in_plane = &(th_attr->in_planes[ip*th_attr->i_size*th_attr->i_size]);
++			out_plane = &(th_attr->out_planes[op*o_size*o_size]);
++			filter = &(th_attr->filters[op*th_attr->f_size*th_attr->f_size*th_attr->n_in_planes+ ip*th_attr->f_size*th_attr->f_size]);
++
++			for(fi = 0; fi < th_attr->f_size; fi++) {
++				for(fj = 0; fj < th_attr->f_size; fj++) {
++					coef = *filter++;
++					out_ptr = out_plane;
++					in_ptr = &in_plane[fi*th_attr->i_size + fj];
++					for(i=0; i < o_size; i++) {
++						for(j=0; j < o_size; j++) {
++							*out_ptr += coef * (*in_ptr++);
++							out_ptr++;
++						}
++						in_ptr += offset;
++					}
++				}
++			}
++		}
++	}
++}
++
++void Convolution_MT(
++		float *in_planes,
++		int n_in_planes,
++		int i_size,
++		float *out_planes,
++		int n_out_planes,
++		float *filters,
++		int f_size
++	)
++{
++	pthread_t threads[N_THREADS];
++	Convolution_th_t args[N_THREADS];
++	int i;
++
++	//Create arguments for threads
++	for(i=0; i < N_THREADS; i++) {
++		args[i].in_planes = in_planes;
++		args[i].n_in_planes = n_in_planes;
++		args[i].i_size = i_size;
++		args[i].out_planes = out_planes;
++		args[i].op_start = i*(n_out_planes / N_THREADS);
++		args[i].n_out_planes = n_out_planes / N_THREADS;
++		args[i].filters = filters;
++		args[i].f_size = f_size;
++	}
++
++	Partial_Convolution(&args[0]);
++
++	//Launch the threads
++	//for(i=0; i < N_THREADS; i++) {
++	//	pthread_create(&threads[i], NULL, Partial_Convolution, &args[i]);
++	//}
++
++	//Join threads
++	//for(i=0; i<N_THREADS; i++) {
++	//	pthread_join(threads[i], NULL);
++	//}
++}
++
++int main()
++{
++	float *inputs, *outputs, *filters;
++	int i = 0;
++	time_t start_time;
++
++	inputs = (float*)malloc(INPUT_S*INPUT_S*INPUT_N*sizeof(float));
++	outputs = (float*)malloc((INPUT_S-FILTER_S+1)*(INPUT_S-FILTER_S+1)*OUTPUT_N*sizeof(float));
++	filters = (float*)malloc(FILTER_S*FILTER_S*INPUT_N*OUTPUT_N*sizeof(float));
++
++	start_time = time(NULL);
++	printf("Starting convolution!\n");
++	for(i=0; i<10; i++)
++		Convolution_MT(inputs, INPUT_N, INPUT_S, outputs, OUTPUT_N, filters, FILTER_S);
++	printf("Finished convolution! Time consumed %ld seconds.\n", time(NULL) - start_time);
++
++	free(inputs);
++	free(outputs);
++	free(filters);
++
++	return 0;
++}
+diff --git a/allwinner/perftest/src/perftest.c.orig b/allwinner/perftest/src/perftest.c.orig
+new file mode 100644
+index 0000000..eb83008
+--- /dev/null
++++ allwinner/perftest/src/perftest.c.orig
+@@ -0,0 +1,165 @@
++//#include <stdint.h>
++#This is a perftest patch written by XuRi.
++#Here is an important change in this file,the bug has been fixed.
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/time.h>
++#include <pthread.h>
++#include <time.h>
++
++#define N_THREADS 	4
++#define INPUT_S		128
++#define INPUT_N		32
++#define OUTPUT_N	32
++#define FILTER_S	9
++
++void Convolution_ST(
++		float *in_planes,
++		int n_in_planes,
++		int i_size,
++		float *out_planes,
++		int n_out_planes,
++		float *filters,
++		int f_size
++	)
++{
++	int op, ip, i,j, fi, fj;
++	int o_size = i_size-f_size + 1;
++	int offset = f_size - 1;
++	float *out_ptr, coef, *in_ptr, *in_plane, *filter, *out_plane;
++
++	for(op = 0; op<n_out_planes; op++) {
++		
++		for(ip = 0; ip<n_in_planes; ip++) {
++
++			in_plane = &(in_planes[ip*i_size*i_size]);
++			filter = &(filters[op*f_size*f_size*n_in_planes+ ip*f_size*f_size]);
++			out_plane = &(out_planes[op*o_size*o_size]);
++
++			for(fi = 0; fi < f_size; fi++) {
++
++				for(fj = 0; fj < f_size; fj++) {
++					coef = *filter++;
++					out_ptr = out_plane;
++					in_ptr = &in_plane[fi*i_size + fj];
++					for(i=0; i < o_size; i++) {
++						for(j=0; j < o_size; j++) {
++							*out_ptr += coef * (*in_ptr++);
++							out_ptr++;
++						}
++						in_ptr += offset;
++					}
++				}
++			}
++		}
++	}
++}
++
++typedef struct {
++	float *in_planes;
++	int n_in_planes;
++	int i_size;
++	float *out_planes;
++	int op_start;
++	int n_out_planes;
++	float *filters;
++	int f_size;
++} Convolution_th_t;
++
++void* Partial_Convolution(
++		void* args
++	)
++{
++	Convolution_th_t *th_attr = (Convolution_th_t*) args;
++	int op, ip, i, j, fi, fj;
++	int o_size = th_attr->i_size - th_attr->f_size + 1;
++	int offset = th_attr->f_size - 1;
++	float *out_ptr, coef, *in_ptr, *in_plane, *out_plane, *filter;
++
++	for(op = th_attr->op_start; op < th_attr->n_out_planes + th_attr->op_start; op++) {
++
++		for(ip = 0; ip < th_attr->n_in_planes; ip++) {
++
++			in_plane = &(th_attr->in_planes[ip*th_attr->i_size*th_attr->i_size]);
++			out_plane = &(th_attr->out_planes[op*o_size*o_size]);
++			filter = &(th_attr->filters[op*th_attr->f_size*th_attr->f_size*th_attr->n_in_planes+ ip*th_attr->f_size*th_attr->f_size]);
++
++			for(fi = 0; fi < th_attr->f_size; fi++) {
++				for(fj = 0; fj < th_attr->f_size; fj++) {
++					coef = *filter++;
++					out_ptr = out_plane;
++					in_ptr = &in_plane[fi*th_attr->i_size + fj];
++					for(i=0; i < o_size; i++) {
++						for(j=0; j < o_size; j++) {
++							*out_ptr += coef * (*in_ptr++);
++							out_ptr++;
++						}
++						in_ptr += offset;
++					}
++				}
++			}
++		}
++	}
++}
++
++void Convolution_MT(
++		float *in_planes,
++		int n_in_planes,
++		int i_size,
++		float *out_planes,
++		int n_out_planes,
++		float *filters,
++		int f_size
++	)
++{
++	pthread_t threads[N_THREADS];
++	Convolution_th_t args[N_THREADS];
++	int i;
++
++	//Create arguments for threads
++	for(i=0; i < N_THREADS; i++) {
++		args[i].in_planes = in_planes;
++		args[i].n_in_planes = n_in_planes;
++		args[i].i_size = i_size;
++		args[i].out_planes = out_planes;
++		args[i].op_start = i*(n_out_planes / N_THREADS);
++		args[i].n_out_planes = n_out_planes / N_THREADS;
++		args[i].filters = filters;
++		args[i].f_size = f_size;
++	}
++
++	Partial_Convolution(&args[0]);
++
++	//Launch the threads
++	//for(i=0; i < N_THREADS; i++) {
++	//	pthread_create(&threads[i], NULL, Partial_Convolution, &args[i]);
++	//}
++
++	//Join threads
++	//for(i=0; i<N_THREADS; i++) {
++	//	pthread_join(threads[i], NULL);
++	//}
++}
++
++int main()
++{
++	float *inputs, *outputs, *filters;
++	int i = 0;
++	time_t start_time;
++
++	inputs = (float*)malloc(INPUT_S*INPUT_S*INPUT_N*sizeof(float));
++	outputs = (float*)malloc((INPUT_S-FILTER_S+1)*(INPUT_S-FILTER_S+1)*OUTPUT_N*sizeof(float));
++	filters = (float*)malloc(FILTER_S*FILTER_S*INPUT_N*OUTPUT_N*sizeof(float));
++
++	start_time = time(NULL);
++	printf("Starting convolution!\n");
++	for(i=0; i<10; i++)
++		Convolution_MT(inputs, INPUT_N, INPUT_S, outputs, OUTPUT_N, filters, FILTER_S);
++	printf("Finished convolution! Time consumed %ld seconds.\n", time(NULL) - start_time);
++
++	free(inputs);
++	free(outputs);
++	free(filters);
++
++	return 0;
++}
+-- 
+1.9.1
+
